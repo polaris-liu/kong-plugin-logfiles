@@ -22,6 +22,11 @@ local cjson = require "cjson"
 local concat = table.concat
 local system_constants = require "lua_system_constants"
 
+-- skywalking 8 start
+local SegmentRef = require("kong.plugins.skywalking.segment_ref")
+local CONTEXT_CARRIER_KEY = 'sw8'
+-- skywalking 8 end
+
 local O_CREAT = system_constants.O_CREAT()
 local O_WRONLY = system_constants.O_WRONLY()
 local O_APPEND = system_constants.O_APPEND()
@@ -47,6 +52,48 @@ local LogfilesHandler = {}
 
 LogfilesHandler.PRIORITY = 9
 LogfilesHandler.VERSION = "0.1.0"
+
+local function log()
+    local data
+    data = ngx.req.get_body_data()
+    
+    -- skywalking 8 start
+    local trace_id ="";
+    local propagatedContext = ngx.req.get_headers()[CONTEXT_CARRIER_KEY]
+    if propagatedContext ~= nil then
+        local ref = SegmentRef.fromSW8Value(propagatedContext)
+        if ref ~= nil then
+            trace_id = ref.trace_id
+        end
+    end
+    -- skywalking 8 end
+    
+    local logs = {
+        client_ip = kong.client.get_ip(),
+        client_forwarded_ip = kong.client.get_forwarded_ip(),
+        trace_id = trace_id,
+        request_scheme = kong.request.get_scheme(),
+        request_host = kong.request.get_host(),
+        request_method = kong.request.get_method(),
+        request_path = kong.request.get_path(),
+        request_headers = kong.request.get_headers(),
+        request_sunmi_id = kong.ctx.shared.sunmi_id,
+        request_sunmi_shopid = kong.ctx.shared.sunmi_shopid,
+        request_raw_body = data,
+        response_status = kong.response.get_status(),
+        response_headers = kong.response.get_headers(),
+        response_body = kong.ctx.shared.respbody,
+        process_time = 0,
+        time = 0
+    }
+
+    if kong.ctx.shared.access_time ~= nil then
+        logs.process_time = (ngx.now() - kong.ctx.shared.access_time)
+        logs.time = kong.ctx.shared.access_time
+    end
+
+    return logs
+end
 
 function LogfilesHandler:access(conf)
     kong.ctx.shared.access_time = ngx.now()
@@ -79,51 +126,31 @@ function LogfilesHandler:body_filter(conf)
 end
 
 function LogfilesHandler:log(conf)
-    -- local message = serialize(ngx)
-    local data
+    local logs = log()
 
-    data = ngx.req.get_body_data()
+    local msg = cjson.encode(logs) 
+    msg = string.format("%s [log] %s", os.date("%Y/%m/%d %H:%M:%S"), msg)
+    msg = msg .. "\n"
 
-    local logs = {
-        client_ip = kong.client.get_ip(),
-        client_forwarded_ip = kong.client.get_forwarded_ip(),
-        request_scheme = kong.request.get_scheme(),
-        request_host = kong.request.get_host(),
-        request_method = kong.request.get_method(),
-        request_path = kong.request.get_path(),
-        request_headers = kong.request.get_headers(),
-        request_sunmi_id = kong.ctx.shared.sunmi_id,
-        request_sunmi_shopid = kong.ctx.shared.sunmi_shopid,
-        request_raw_body = data,
-        response_status = kong.response.get_status(),
-        response_headers = kong.response.get_headers(),
-        response_body = kong.ctx.shared.respbody,
-        process_time = 0,
-        time = 0
-    }
+    local file_name = conf.filename .. os.date("%Y-%m-%d") .. ".log"
 
-    if kong.ctx.shared.access_time ~= nil then
-        logs.process_time = (ngx.now() - kong.ctx.shared.access_time)
-        logs.time = kong.ctx.shared.access_time
-    end
+    local file_path = conf.path .. "/" .. file_name
 
-    local msg = cjson.encode(logs) .. "\n"
-
-    local fd = file_descriptors[conf.path]
+    local fd = file_descriptors[file_path]
 
     if fd and conf.reopen then
         C.close(fd)
-        file_descriptors[conf.path] = nil
+        file_descriptors[file_path] = nil
         fd = nil
     end
 
     if not fd then
-        fd = C.open(conf.path, oflags, mode)
+        fd = C.open(file_path, oflags, mode)
         if fd < 0 then
             local errno = ffi.errno()
             ngx.log(ngx.ERR, "[logfiles] failed to open the file: ", ffi.string(C.strerror(errno)))
         else
-            file_descriptors[conf.path] = fd
+            file_descriptors[file_path] = fd
         end
     end
 
