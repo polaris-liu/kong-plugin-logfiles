@@ -22,6 +22,11 @@ local cjson = require "cjson"
 local concat = table.concat
 local system_constants = require "lua_system_constants"
 
+-- skywalking 8 start
+local SegmentRef = require("kong.plugins.skywalking.segment_ref")
+local CONTEXT_CARRIER_KEY = 'sw8'
+-- skywalking 8 end
+
 local O_CREAT = system_constants.O_CREAT()
 local O_WRONLY = system_constants.O_WRONLY()
 local O_APPEND = system_constants.O_APPEND()
@@ -47,6 +52,8 @@ local LogfilesHandler = {}
 
 LogfilesHandler.PRIORITY = 9
 LogfilesHandler.VERSION = "0.1.0"
+
+
 
 function LogfilesHandler:access(conf)
     kong.ctx.shared.access_time = ngx.now()
@@ -81,12 +88,23 @@ end
 function LogfilesHandler:log(conf)
     -- local message = serialize(ngx)
     local data
-
     data = ngx.req.get_body_data()
-
+	
+	-- skywalking 8 start
+	local trace_id ="";
+	local propagatedContext = ngx.req.get_headers()[CONTEXT_CARRIER_KEY]
+	if propagatedContext ~= nil then
+		local ref = SegmentRef.fromSW8Value(propagatedContext)
+		if ref ~= nil then
+			trace_id = ref.trace_id
+		end
+	end
+	-- skywalking 8 end
+	
     local logs = {
         client_ip = kong.client.get_ip(),
         client_forwarded_ip = kong.client.get_forwarded_ip(),
+		trace_id = trace_id,
         request_scheme = kong.request.get_scheme(),
         request_host = kong.request.get_host(),
         request_method = kong.request.get_method(),
