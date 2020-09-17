@@ -17,15 +17,26 @@
 
 local kong = kong
 local ffi = require "ffi"
-local zlib = require("zlib")
 local cjson = require "cjson"
-local concat = table.concat
+local table_concat = table.concat
+local table_insert = table.insert
 local system_constants = require "lua_system_constants"
+
+-- gzip start
+local zlib = require('ffi-zlib')
+local ZLIB_BUFSIZE = 16384
+-- gzip end
 
 -- skywalking 8 start
 local SegmentRef = require("kong.plugins.skywalking.segment_ref")
 local CONTEXT_CARRIER_KEY = 'sw8'
 -- skywalking 8 end
+
+-- log content type
+local CONTENT_TYPE_MAIN_LIST = {
+    "text",
+    "application",  
+}
 
 local O_CREAT = system_constants.O_CREAT()
 local O_WRONLY = system_constants.O_WRONLY()
@@ -59,7 +70,7 @@ local function log()
     
     -- skywalking 8 start
     local trace_id ="";
-    local propagatedContext = ngx.req.get_headers()[CONTEXT_CARRIER_KEY]
+    local propagatedContext = kong.request.get_header(CONTEXT_CARRIER_KEY)
     if propagatedContext ~= nil then
         local ref = SegmentRef.fromSW8Value(propagatedContext)
         if ref ~= nil then
@@ -82,45 +93,79 @@ local function log()
         request_raw_body = data,
         response_status = kong.response.get_status(),
         response_headers = kong.response.get_headers(),
-        response_body = kong.ctx.shared.respbody,
+        response_body = kong.ctx.plugin.respbody,
         process_time = 0,
         time = 0
     }
 
-    if kong.ctx.shared.access_time ~= nil then
-        logs.process_time = (ngx.now() - kong.ctx.shared.access_time)
-        logs.time = kong.ctx.shared.access_time
+    if kong.ctx.plugin.access_time ~= nil then
+        logs.process_time = (ngx.now() - kong.ctx.plugin.access_time)
+        logs.time = kong.ctx.plugin.access_time
     end
 
     return logs
 end
 
 function LogfilesHandler:access(conf)
-    kong.ctx.shared.access_time = ngx.now()
+    kong.ctx.plugin.access_time = ngx.now()
+
+
 end
 
 function LogfilesHandler:body_filter(conf)
 
+    local log_response_body_flag = false
+    local content_type = kong.response.get_header("Content-Type")
+    for index,value in ipairs(CONTENT_TYPE_MAIN_LIST) do
+        if string.find(content_type, value) then
+            log_response_body_flag = true
+            break
+        end
+    end
+
     local ctx = ngx.ctx
     local chunk, eof = ngx.arg[1], ngx.arg[2]
-    local uncompress
+    local uncompress = nil
 
-    ctx.rt_body_chunks = ctx.rt_body_chunks or {}
-    ctx.rt_body_chunk_number = ctx.rt_body_chunk_number or 1
+    kong.ctx.plugin.body_chunks = kong.ctx.plugin.body_chunks or {}
+    kong.ctx.plugin.body_chunk_number = kong.ctx.plugin.body_chunk_number or 1
 
     if eof then
-        local chunks = concat(ctx.rt_body_chunks)
+        local chunks = table_concat(kong.ctx.plugin.body_chunks)
+        if log_response_body_flag then
+            -- gzip start
+            local encoding = kong.response.get_header("Content-Encoding")
+            if encoding == "gzip" then
+                -- uncompress = zlib.inflate()(chunks)
+                local count = 0
+                local output_table = {}
 
-        local encoding = kong.response.get_header("Content-Encoding")
-        if encoding == "gzip" then
-            uncompress = zlib.inflate()(chunks)
+                local output = function(data)
+                    table_insert(output_table, data)
+                end
+
+                local input = function(bufsize)
+                    local start = count > 0 and bufsize*count or 1
+                    local data = chunks:sub(start, (bufsize*(count+1)-1) )
+                    count = count + 1
+                    return data
+                end
+
+                local ok, err = zlib.inflateGzip(input, output, ZLIB_BUFSIZE)
+                if not ok then
+                    ngx.log(ngx.ERR, "[logfiles] zlib.deflateGzip errror: ", err)
+                end
+                uncompress = table_concat(output_table,'')
+            end
+            -- gzip end
+            kong.ctx.plugin.respbody = uncompress or chunks
+        else
+            kong.ctx.plugin.respbody = "[this response body type is not text]"
         end
-
-        kong.ctx.shared.respbody = uncompress or chunks
         ngx.arg[1] = chunks
     else
-        ctx.rt_body_chunks[ctx.rt_body_chunk_number] = chunk
-        ctx.rt_body_chunk_number = ctx.rt_body_chunk_number + 1
+        kong.ctx.plugin.body_chunks[kong.ctx.plugin.body_chunk_number] = chunk
+        kong.ctx.plugin.body_chunk_number = kong.ctx.plugin.body_chunk_number + 1
         ngx.arg[1] = nil
     end
 end
@@ -132,7 +177,7 @@ function LogfilesHandler:log(conf)
     msg = string.format("%s [log] %s", os.date("%Y/%m/%d %H:%M:%S"), msg)
     msg = msg .. "\n"
 
-    local file_name = conf.filename .. os.date("%Y-%m-%d") .. ".log"
+    local file_name = conf.filename .."-" .. os.date("%Y-%m-%d") .. ".log"
 
     local file_path = conf.path .. "/" .. file_name
 
@@ -148,7 +193,7 @@ function LogfilesHandler:log(conf)
         fd = C.open(file_path, oflags, mode)
         if fd < 0 then
             local errno = ffi.errno()
-            ngx.log(ngx.ERR, "[logfiles] failed to open the file: ", ffi.string(C.strerror(errno)))
+            ngx.log(ngx.ERR, "[logfiles] failed to open the file[" .. file_path .. "]: ", ffi.string(C.strerror(errno)))
         else
             file_descriptors[file_path] = fd
         end
