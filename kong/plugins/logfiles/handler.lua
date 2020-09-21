@@ -32,12 +32,6 @@ local SegmentRef = require("kong.plugins.skywalking.segment_ref")
 local CONTEXT_CARRIER_KEY = 'sw8'
 -- skywalking 8 end
 
--- log content type
-local CONTENT_TYPE_MAIN_LIST = {
-    "text",
-    "application",  
-}
-
 local O_CREAT = system_constants.O_CREAT()
 local O_WRONLY = system_constants.O_WRONLY()
 local O_APPEND = system_constants.O_APPEND()
@@ -115,11 +109,22 @@ end
 function LogfilesHandler:body_filter(conf)
 
     local log_response_body_flag = false
-    local content_type = kong.response.get_header("Content-Type")
-    for index,value in ipairs(CONTENT_TYPE_MAIN_LIST) do
-        if string.find(content_type, value) then
-            log_response_body_flag = true
-            break
+    -- 
+    if conf.recorded_all_content_type then
+        log_response_body_flag = true
+    else
+        local content_type = kong.response.get_header("Content-Type")
+        if content_type ~= nil then
+            for index,value in pairs(conf.recorded_content_type) do
+                if string.find(content_type, value) then
+                    log_response_body_flag = true
+                    break
+                end
+            end
+        else
+            if conf.recorded_content_type_is_null then
+                log_response_body_flag = true
+            end
         end
     end
 
@@ -160,7 +165,7 @@ function LogfilesHandler:body_filter(conf)
             -- gzip end
             kong.ctx.plugin.respbody = uncompress or chunks
         else
-            kong.ctx.plugin.respbody = "[this response body type is not text]"
+            kong.ctx.plugin.respbody = "[This response Content-Type is not recorded]"
         end
         ngx.arg[1] = chunks
     else
@@ -174,8 +179,7 @@ function LogfilesHandler:log(conf)
     local logs = log()
 
     local msg = cjson.encode(logs) 
-    msg = string.format("%s [log] %s", os.date("%Y/%m/%d %H:%M:%S"), msg)
-    msg = msg .. "\n"
+    msg = msg .. ",\n"
 
     local file_name = conf.filename .."-" .. os.date("%Y-%m-%d") .. ".log"
 

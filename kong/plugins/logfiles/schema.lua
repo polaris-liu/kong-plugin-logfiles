@@ -24,17 +24,38 @@ return {
     { config = {
         type = "record",
         fields = {
-          { path = { type = "string",
-                 required = true,
-                 match = [[^[^*&%%\`]+$]],
-                 err = "not a valid path",
+          { path = { 
+              type = "string",
+              required = true,
+              match = [[^[^*&%%\`]+$]],
+              err = "not a valid path",
+              default = "/data/kong-log",
           }, },
-          { filename = { type = "string",
-                 required = true,
-                 match = [[^[^*&%%\`]+$]],
-                 err = "not a valid filename",
+          { filename = { 
+              type = "string",
+              required = true,
+              match = [[^[^*&%%\`]+$]],
+              err = "not a valid filename",
+              default = "access",
           }, },
-          { reopen = { type = "boolean", default = false }, },
+          { reopen = { 
+              type = "boolean", 
+              default = false 
+          }, },
+          { recorded_all_content_type = { 
+              type = "boolean", 
+              default = false
+          }, },
+          { recorded_content_type_is_null = { 
+              type = "boolean", 
+              default = false
+          }, },
+          { recorded_content_type = {
+              type = "array",
+              required = true,
+              elements = { type = "string" },
+              default = { "application/json", "text/xml", "application/xml", "application/x-www-form-urlencoded", "multipart/form-data", },
+          }, },
     }, }, },
   }
 }
