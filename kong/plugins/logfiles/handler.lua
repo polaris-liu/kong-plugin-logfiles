@@ -21,7 +21,7 @@ local cjson = require "cjson"
 local table_concat = table.concat
 local table_insert = table.insert
 local system_constants = require "lua_system_constants"
-
+local socket = require('socket')
 -- gzip start
 local zlib = require('ffi-zlib')
 local ZLIB_BUFSIZE = 16384
@@ -59,9 +59,7 @@ LogfilesHandler.PRIORITY = 9
 LogfilesHandler.VERSION = "0.1.0"
 
 local function log()
-    local data
-    data = ngx.req.get_body_data()
-    
+
     -- skywalking 8 start
     local trace_id ="";
     local propagatedContext = kong.request.get_header(CONTEXT_CARRIER_KEY)
@@ -73,28 +71,15 @@ local function log()
     end
     -- skywalking 8 end
     
-    local logs = {
-        client_ip = kong.client.get_ip(),
-        client_forwarded_ip = kong.client.get_forwarded_ip(),
-        trace_id = trace_id,
-        request_scheme = kong.request.get_scheme(),
-        request_host = kong.request.get_host(),
-        request_method = kong.request.get_method(),
-        request_path = kong.request.get_path(),
-        request_headers = kong.request.get_headers(),
-        request_sunmi_id = kong.ctx.shared.sunmi_id,
-        request_sunmi_shopid = kong.ctx.shared.sunmi_shopid,
-        request_raw_body = data,
-        response_status = kong.response.get_status(),
-        response_headers = kong.response.get_headers(),
-        response_body = kong.ctx.plugin.respbody,
-        process_time = 0,
-        time = 0
-    }
+    local logs = kong.log.serialize()
+
+    logs.trace_id = trace_id
+    logs.request_raw_body = kong.ctx.plugin.get_raw_body
+    logs.response_body = kong.ctx.plugin.respbody
+    logs.process_time = 0
 
     if kong.ctx.plugin.access_time ~= nil then
         logs.process_time = (ngx.now() - kong.ctx.plugin.access_time)
-        logs.time = kong.ctx.plugin.access_time
     end
 
     return logs
@@ -102,8 +87,7 @@ end
 
 function LogfilesHandler:access(conf)
     kong.ctx.plugin.access_time = ngx.now()
-
-
+    kong.ctx.plugin.get_raw_body = kong.request.get_raw_body()
 end
 
 function LogfilesHandler:body_filter(conf)
@@ -183,7 +167,12 @@ function LogfilesHandler:log(conf)
 
     local file_name = conf.filename .."-" .. os.date("%Y-%m-%d") .. ".log"
 
-    local file_path = conf.path .. "/" .. file_name
+    if conf.filename_add_hostname then
+        local hostname = socket.dns.gethostname()
+        file_name = hostname .. "-" .. file_name
+    end
+
+    local file_path = conf.path .. "/".. file_name
 
     local fd = file_descriptors[file_path]
 

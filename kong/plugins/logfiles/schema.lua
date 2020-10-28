@@ -38,10 +38,21 @@ return {
               err = "not a valid filename",
               default = "access",
           }, },
+          { filename_add_hostname = { 
+              type = "boolean", 
+              default = true 
+          }, },
           { reopen = { 
               type = "boolean", 
               default = false 
           }, },
+          -- { recorded_max_response_length = { 
+          --     type = "number", 
+          --     default = 2048
+          --     required = true,
+          --     match = [[^[1-9]\d*|0$]]
+          --     err = "Please count a number greater than or equal to zero",
+          -- }, },
           { recorded_all_content_type = { 
               type = "boolean", 
               default = false
